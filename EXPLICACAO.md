@@ -1,130 +1,140 @@
-# Entendendo Minha Biblioteca de Jogos
+# Entendendo o GameLog
 
-O navegador mostra uma página HTML. Quando você abre a página ou envia um formulário, o Servant escolhe a função que deve responder. Essa função consulta o PostgreSQL ou altera a tabela `jogos`. O [README](README.md) contém as instruções de instalação.
+A página enviada pelo Haskell contém os formulários e os cards da biblioteca. O Servant recebe as requisições, o PostgreSQL guarda os dados e o JavaScript cuida da busca externa, dos filtros e das estrelas clicáveis.
 
-## Os tipos em `Main.hs`
+## Banco de dados e formulários
 
-- `data DadosJogo = DadosJogo Text Text Text` cria um tipo e um construtor com o mesmo nome. O construtor reúne nome, gênero e plataforma. `cadastrar (DadosJogo nome genero plataforma)` retira os três valores na mesma ordem em que foram guardados.
-- `type Jogo = (Int32, Text, Text, Text)` dá um nome à tupla de quatro valores que vem do banco. O primeiro é o identificador. `Int32` é um inteiro com sinal de 32 bits, a mesma faixa do `INTEGER` que o PostgreSQL usa para o `SERIAL`. Já `Int` é o tipo do limite de caracteres em `validarCampo`.
-- `Text` guarda texto, inclusive acentos. `String` é uma lista de caracteres. `show identificador` devolve uma `String` e `Texto.pack` converte essa `String` em `Text` para montar a URL.
-- `Maybe Jogo` representa uma edição opcional. `Nothing` mostra o cadastro vazio e `Just jogo` preenche o formulário com o jogo selecionado.
-- `Either Text Text` representa erro ou acerto. `Left mensagem` carrega a mensagem da validação e `Right valor` carrega o texto aceito.
-- `type API = ...` dá um nome ao conjunto de rotas. O Servant usa esse tipo para conferir os argumentos, métodos e retornos das funções ligadas a ele.
+A tabela `jogos` guarda o nome, a capa e os dados pessoais. A migração preserva as colunas e os valores antigos de gênero e plataforma, agora opcionais no banco. Novos cadastros deixam essas colunas nulas.
 
-## O que cada importação traz
-
-| Importação | Uso no projeto |
+| Campo | Como funciona |
 | --- | --- |
-| `Control.Exception` | `bracket` abre e fecha a conexão em torno de uma operação. `try` converte uma exceção do tipo indicado em `Left` e um resultado normal em `Right`. |
-| `Control.Monad.IO.Class` | `liftIO` permite fazer uma ação de `IO`, como acessar o banco, dentro de um `Handler`. |
-| `Data.Int` | Fornece `Int32` para o identificador. |
-| `Data.List` | `find` procura na lista o primeiro jogo com o ID pedido. |
-| `Data.Text` e `Data.Text.IO` | A primeira fornece o tipo `Text` e operações como `strip`, `length` e `pack`. A segunda lê `style.css` como texto. Os apelidos `Texto` e `ArquivoTexto` deixam a origem das funções visível. |
-| `Database.PostgreSQL.Simple` | Abre e fecha conexões, consulta linhas com `query_` e executa alterações com `execute`. `Only` envolve um parâmetro único e `SqlError` descreve falhas reportadas pela biblioteca. |
-| `Lucid` | Monta HTML com funções que correspondem a tags e atributos. `toHtml` escreve o texto de um jogo com o escape exigido pelo HTML. |
-| `Network.Wai.Handler.Warp` | Inicia o servidor HTTP e configura endereço e porta. |
-| `Paths_biblioteca_jogos` | Módulo gerado pelo Cabal. `getDataFileName` localiza o CSS declarado em `data-files`. |
-| `Servant` | Exporta os tipos de rota, `Handler`, `Server`, `serve`, `Proxy` e os códigos HTTP usados no projeto. |
-| `Servant.HTML.Lucid` | Liga `Html ()` ao formato de resposta `HTML` do Servant. |
-| `Web.FormUrlEncoded` | Fornece `FromForm` para converter o formulário e `parseUnique` para ler exatamente um valor de cada campo. |
-| `Prelude` (automática) | Fornece tipos e funções básicos como `Int`, `Maybe`, `Either`, `pure`, `show`, `null` e `mapM_`. |
+| `status` | Texto obrigatório com um dos valores `quero-jogar`, `jogando` ou `jogados`. |
+| `nota` | `numeric` exato. `NULL` significa sem nota. A restrição exige que o dobro da nota seja um inteiro entre 0 e 10. Assim, 0 e 3,5 são válidos. |
+| `review` | Texto pessoal opcional, com até 2.000 caracteres. Um campo vazio vira `NULL`. |
+| `cheapshark_id` | Identificador externo opcional. A restrição `UNIQUE` impede que a mesma entrada da CheapShark seja guardada duas vezes. Formulários manuais deixam o valor nulo. |
 
-## Funções do backend
+O navegador envia um formulário com `POST`. `FromForm` converte os pares de campos em `DadosJogo` e usa `Left` para comunicar entradas inválidas. O Servant devolve HTTP 400 nesse caso. As consultas do `postgresql-simple` recebem os valores separados do SQL. Cada `?` é preenchido com o parâmetro correspondente.
 
-| Função | O que recebe e o que devolve |
+- `SELECT` lê todos os jogos da biblioteca ou um único jogo pelo ID. `trim_scale(nota)::text` transforma a nota em texto para o formulário e remove zeros à direita, por exemplo `3.50` vira `3.5`.
+- `INSERT` salva os campos do novo jogo. `ON CONFLICT (cheapshark_id) DO NOTHING` protege contra duas inclusões do mesmo identificador, inclusive se dois pedidos chegarem juntos. Nesse caso, o handler devolve 409.
+- `UPDATE` grava nome, categoria, nota e review pelo ID. O identificador externo e a capa cadastrada são preservados na edição.
+- `DELETE` remove a linha pelo ID e volta à biblioteca. A nota e a review fazem parte dessa mesma linha. O handler também remove as capturas ligadas ao jogo.
+
+## Como o Servant funciona
+
+`API` descreve as rotas e seus tipos. `serveWithContext` conecta a descrição às funções que atendem os pedidos e entrega ao Servant as opções do multipart. O Warp escuta em `127.0.0.1:8080`.
+
+| Rota | Função |
 | --- | --- |
-| `main` | Começa a execução. Lê o CSS, anuncia o endereço, liga a definição `API` a `servidor css` com `serve` e inicia o Warp em `127.0.0.1:8080`. `IO ()` indica uma ação cujo resultado final é a unidade `()`. |
-| `servidor` | Recebe o CSS e devolve `Server API`, com as quatro funções na mesma ordem das rotas. `listar css` deixa apenas o argumento opcional da edição para o Servant preencher. |
-| `fromForm` | Recebe os campos brutos do formulário. Lê os campos pelos nomes usados no HTML, valida cada um e devolve `Right (DadosJogo ...)` ou `Left mensagem`. A declaração `instance FromForm DadosJogo` ensina ao Servant a fazer essa conversão para o nosso tipo. |
-| `validarCampo` | Recebe o rótulo, o limite e o texto digitado. `limpo` é o texto com os espaços das pontas removidos. O resultado é um `Left` se vazio, longo demais ou com caractere nulo, e um `Right` com o texto limpo se válido. |
-| `comBanco` | Recebe uma função que usa uma `Connection` e devolve uma ação `Handler a`. O `a` representa o tipo do resultado de cada operação. `abrir` cria a conexão. A função local `executar` recebe a conexão e usa `try` sobre a consulta. O `try` externo envolve o `bracket`, que fecha a conexão ao sair. |
-| `listar` | Recebe o CSS e um ID opcional. Busca todos os jogos e devolve `Html ()`. Se houver um ID, `find` procura o jogo na lista para preencher a edição. Se o ID não estiver na lista, responde com 404. |
-| `cadastrar` | Recebe `DadosJogo`, executa o `INSERT`, descarta a contagem de linhas e redireciona para a página inicial. |
-| `editar` | Recebe o ID e os novos `DadosJogo`. O `UPDATE` devolve o número de linhas afetadas. Se for zero, responde com 404. Se alterar uma linha, redireciona. |
-| `excluir` | Recebe o ID. O `DELETE` devolve o número de linhas removidas. Se for zero, responde com 404. Se remover uma linha, redireciona. |
-| `voltarInicio` | Devolve a resposta HTTP 303 com o cabeçalho `Location: /`. `throwError` finaliza o `Handler` com a resposta HTTP escolhida. `NoContent` é o tipo declarado dos handlers de alteração, que encerram a operação pelo redirecionamento sem renderizar uma página nesse passo. |
-| `pagina` | Recebe CSS, a lista de jogos e o jogo opcional da edição. Devolve o documento HTML completo e mostra uma mensagem se a lista estiver vazia. |
-| `formulario` | Recebe URL de destino, nome, gênero, plataforma e texto do botão. Devolve o mesmo HTML de formulário para cadastro ou edição. |
-| `mostrarJogo` | Recebe uma tupla `Jogo`. Devolve um item da lista com nome, gênero, plataforma, link de edição e formulário de exclusão. |
+| `GET /` | `listar` cria a página inicial. Com `?editar=7`, abre os detalhes do jogo 7 com o formulário de edição expandido. |
+| `GET /jogos/7` | `detalhes` busca o jogo 7 e renderiza a página individual. |
+| `POST /jogos` | `cadastrar` insere um jogo. |
+| `POST /jogos/7/editar` | `editar` atualiza o jogo 7. |
+| `POST /jogos/7/excluir` | `excluir` remove o jogo 7 e suas capturas. |
+| `POST /jogos/7/screenshots` | `enviarCaptura` recebe uma imagem para o jogo 7. |
+| `GET /jogos/7/screenshots/3` | `verCaptura` entrega a imagem 3 se ela pertencer ao jogo 7. |
+| `POST /jogos/7/screenshots/3/excluir` | `excluirCaptura` remove a captura 3 do jogo 7. |
 
-## Sintaxe Haskell usada no código
+`Capture "id" Int32` lê o número de um segmento da URL. `QueryParam "editar" Int32` entrega um valor opcional. `ReqBody '[FormUrlEncoded] DadosJogo` indica o formato padrão dos formulários. Ao concluir um `POST`, o servidor responde com HTTP 303 e um cabeçalho `Location`. O navegador faz um novo `GET`, então atualizar a página repete a leitura.
 
-| Símbolo ou palavra | Como ler no projeto |
+## Funções em `Main.hs`
+
+| Função | O que faz |
 | --- | --- |
-| `::` e `->` | `excluir :: Int32 -> Handler NoContent` se lê “excluir recebe um `Int32` e devolve um `Handler NoContent`”. Nas alternativas de `case`, `->` aponta para o que será feito quando o padrão aparecer. |
-| `=` e `let` | `=` define um valor ou uma função. `let idTexto = ...` dá um nome a um valor local dentro de `do`. |
-| `do`, `<-` e `pure` | `do` encadeia passos. `css <- ArquivoTexto.readFile caminhoCSS` executa a leitura e dá o nome `css` ao resultado. `pure` coloca um valor no contexto esperado, por exemplo `Right` na conversão do formulário ou uma resposta normal em `Handler`. |
-| `\|`, `where`, `otherwise` | As guardas de `validarCampo` são testadas de cima para baixo. `otherwise` cobre o caso restante. `where` define nomes locais, como `limpo`. |
-| `==` e `>` | Comparam dois valores. `alterados == 0` verifica se nenhuma linha mudou. `Texto.length limpo > limite` detecta texto acima do limite. |
-| `<>` | Junta trechos de texto, por exemplo `"/?editar=" <> idTexto`. |
-| `$` | Aplica a função à esquerda à expressão inteira à direita. `head_ $ do ...` é uma forma de escrever `head_ (do ...)`. |
-| `\` e `_` | `\conexao -> ...` define uma função sem nome com um argumento. `_` ignora um valor, como as três colunas que `find` deixa de lado ao comparar IDs. O sublinhado final em `h1_` e `query_` faz parte do nome dessas funções. |
-| `[]`, `'[...]`, `()` e tuplas | `[Jogo]` é o tipo de uma lista de jogos. `[("Location", "/")]` é uma lista com um par. `'[HTML]` é uma lista no nível dos tipos. `()` é o valor sem informação, por exemplo em `IO ()`. A tupla `Jogo` reúne quatro valores em uma ordem fixa. |
-| `{...}` | `err404 {errBody = "Jogo inexistente."}` copia uma resposta padrão alterando o campo `errBody`. O mesmo formato define `errHeaders` no 303. |
-| `:>` e `:<\|>` | `:>` liga partes de uma rota. `:<\|>` separa rotas no tipo `API` e liga os handlers na definição de `servidor`. |
+| `main` | Localiza o CSS e o JavaScript com `getDataFileName`, lê os arquivos e inicia o Warp. `withFile` fecha o arquivo automaticamente e `hSetEncoding arquivo utf8` preserva os acentos do script no Windows. |
+| `servidor` | Liga cada rota ao seu handler, na ordem em que aparece em `API`. |
+| `comBanco` | Recebe uma função que usa uma conexão. `bracket` abre e fecha a conexão. Os dois `try` permitem responder 503 em falhas de conexão e 500 em falhas da consulta. |
+| `fromForm` | Lê os campos com `parseUnique` e `lookupMaybe`, valida o status, aceita as meias estrelas de `notasPermitidas` e converte campos opcionais vazios em `Nothing`. |
+| `validarCampo` | Remove espaços nas bordas e recusa texto vazio, longo demais ou que contenha o caractere nulo. |
+| `capaValida` | Mantém uma URL de capa opcional com prefixo HTTPS e tamanho permitido. |
+| `listar` | Consulta a biblioteca para a página principal ou encaminha uma URL de edição para `detalhes`. |
+| `detalhes` | Consulta o jogo e os identificadores de suas capturas com `Only identificador` e gera a página individual. Responde 404 quando o jogo não existe. |
+| `cadastrar` | Insere um `DadosJogo` e volta à biblioteca. Retorna 409 quando já existe o identificador externo. |
+| `editar` | Atualiza o jogo que tem o ID da URL. Retorna 404 quando nenhuma linha foi alterada. |
+| `excluir` | Remove um jogo pelo ID e usa `voltarInicio` se houver uma linha excluída. |
+| `voltarInicio` | Envia o 303 com o caminho `/`. |
+| `documentoHtml` | Monta o documento HTML compartilhado com cabeçalho, CSS, JavaScript e conteúdo. |
+| `pagina` | Mostra os filtros, os cards e o formulário de cadastro. |
+| `paginaJogo` | Mostra os dados do jogo, a review pessoal e as opções de editar e excluir. O parâmetro booleano indica se a edição deve começar aberta. |
+| `buscaCatalogo` | Monta o campo de busca externa e a área de resultados. |
+| `formulario` | Gera os controles de cadastro ou edição e escolhe a rota que recebe o formulário. |
+| `nomeStatus` | Busca o rótulo de uma categoria pela sua chave interna. |
+| `opcoesStatus` | Escreve as opções de categoria e marca a opção atual. |
+| `opcaoNota` | Escreve uma opção de nota, com vírgula na interface e ponto no valor enviado ao servidor. |
+| `mostrarNota` | Distingue **Sem nota** de uma nota real, inclusive zero. Exibe estrelas e o valor registrado. |
+| `mostrarCapa` | Monta uma imagem HTTPS quando disponível e um fundo **Sem capa**. |
+| `mostrarJogo` | Gera um card com link para a página individual e atributos `data-*` que o JavaScript usa nos filtros. |
 
-As quatro linhas `LANGUAGE` no começo habilitam recursos específicos. `DataKinds` permite dizer, no tipo da rota, quais são os caminhos e formatos. `TypeOperators` permite escrever operadores como `:>` em tipos. `OverloadedStrings` permite usar literais entre aspas como `Text`, HTML ou SQL conforme o contexto. `ScopedTypeVariables` permite declarar o tipo `SqlError` nos padrões `Left`.
+`categorias` guarda os pares de chave e rótulo. `notasPermitidas` guarda as onze notas aceitas. `DadosJogo` reúne os campos do formulário; `Jogo` é a tupla com os campos lidos do banco, na ordem do `SELECT`. Os campos de texto usam `Text`. `Int32` representa o ID inteiro que vem do PostgreSQL.
 
-## Como Servant e HTML se encontram
+## Tipos e operadores para a apresentação
 
-`serve (Proxy :: Proxy API) (servidor css)` entrega ao Servant a descrição das URLs e a implementação correspondente. `Proxy` identifica qual tipo usar. Um `Handler` pode produzir o resultado esperado da rota ou terminar com uma resposta HTTP específica.
+- `::` apresenta um tipo e `->` indica os argumentos e o retorno. `Int32 -> Handler NoContent` recebe um ID e descreve a ação de uma rota sem corpo de sucesso.
+- `Maybe a` significa valor opcional. `Just "0"` contém uma nota zero. `Nothing` representa uma nota ausente e vira `NULL` no banco.
+- `Either Text a` tem `Left` para erro e `Right` para um resultado válido.
+- `do` encadeia ações. `<-` dá um nome ao resultado de uma ação e `pure` devolve um valor no contexto usado, como `Handler` ou `Either`.
+- `$ ` aplica uma função à expressão à direita. `form_ [...] $ do` envolve o conteúdo do bloco no formulário. `<>` junta textos ou listas de atributos.
+- `:>` conecta partes de uma rota. `:<|>` separa rotas e liga suas implementações.
+- `\conexao -> ...` declara uma função sem nome. `_` em um padrão ignora um valor. `[jogo]` reconhece uma lista com exatamente um elemento.
+- `==`, `<=`, `>=`, `>` e `&&` comparam valores e combinam condições. `elem` e `notElem` consultam se algo pertence a uma lista. As guardas com `|` testam condições na ordem em que aparecem.
+- `map` transforma os elementos de uma lista. `mapM_` aplica uma ação a cada elemento, por exemplo renderizar cada card do HTML.
+- `show` converte o ID em `String`. `Texto.pack` produz `Text` para o HTML e `fromString` constrói o tipo de texto do cabeçalho de redirecionamento.
 
-| Método e caminho | Como o Servant interpreta | Resultado |
-| --- | --- | --- |
-| `GET /` ou `GET /?editar=3` | `QueryParam "editar" Int32` lê a parte depois de `?` como número opcional. `Get '[HTML]` pede uma página HTML. | Lista os jogos e, com um ID existente, apresenta o formulário de edição. |
-| `POST /jogos` | `ReqBody '[FormUrlEncoded] DadosJogo` lê os campos do corpo. | Cadastra e redireciona. |
-| `POST /jogos/3/editar` | `Capture "id" Int32` lê o `3` do caminho. `ReqBody` lê os três campos enviados. | Edita e redireciona. |
-| `POST /jogos/3/excluir` | `Capture` lê o ID. O caminho já indica o jogo que será excluído. | Exclui e redireciona. |
+Os recursos de linguagem no início do arquivo habilitam literais e listas no nível dos tipos (`DataKinds`), operadores em tipos (`TypeOperators`), literais em vários tipos de texto (`OverloadedStrings`) e anotações de tipos nas exceções (`ScopedTypeVariables`).
 
-`Get` atende a leitura de páginas. `Post` recebe as alterações porque um formulário HTML pode enviar `POST` diretamente. A tag `form` informa o `method` e o `action`. Os nomes em `name_` viram as chaves do corpo, como `nome=Celeste&genero=Plataforma&plataforma=PC`. O próprio navegador envia o formulário e segue o redirecionamento. Ele interpreta o CSS do elemento `<style>`, preenchido com `style.css` ao gerar a página. As tags de `Lucid` ficam em `Main.hs` junto com os valores que o servidor deve preencher.
+## JavaScript no navegador
 
-O Servant responde com 400 quando o formulário não passa pela conversão ou quando o parâmetro de consulta é inválido. Para um jogo inexistente, os handlers respondem com 404. Uma falha ao abrir a conexão retorna 503. Uma falha SQL durante a consulta retorna 500.
+A busca externa usa `fetch` para consultar o endpoint `/api/1.0/games` da CheapShark. O resultado fornece `external` (nome), `thumb` (capa) e `gameID` (identificador). O script cria os resultados com `textContent`. Ao selecionar um, preenche os campos do formulário. O jogo só é guardado quando você envia o cadastro. Se a API falhar, o formulário manual permanece disponível. [Documentação da CheapShark](https://apidocs.cheapshark.com/)
 
-## Conexão e consultas SQL
+Em `filtrarBiblioteca`, o JavaScript combina o nome digitado com a categoria selecionada e esconde os cards que não correspondem. Nas estrelas clicáveis, cada estrela oferece duas regiões, cada qual valendo meia estrela. O clique altera o mesmo campo `nota` que pode ser usado pelo teclado. A opção **Sem nota** envia um campo vazio e a opção **0** envia o valor zero.
 
-`connectPostgreSQL "dbname=biblioteca_jogos connect_timeout=3"` indica o banco e o tempo limite em segundos para estabelecer a conexão a um endereço. A biblioteca cliente do PostgreSQL lê host, porta e usuário de `PGHOST`, `PGPORT` e `PGUSER`. A senha vem do arquivo de senhas configurado no Windows. Para cada operação, `bracket` abre uma conexão, roda a consulta e fecha a conexão mesmo em caso de erro durante a operação.
+## Perguntas para a avaliação oral
 
-`banco.sql` cria a tabela `jogos`. A coluna `id SERIAL PRIMARY KEY` identifica cada linha e recebe um valor automaticamente no cadastro. As outras colunas exigem um valor e têm limites de 100, 50 e 50 caracteres.
+1. **O que indica `Capture "id" Int32`?** Que parte da URL vira o número do jogo.
+2. **Por que as notas usam `numeric` no banco?** Para avaliar as restrições de faixa e de meia estrela com valores exatos.
+3. **Como o jogo sem nota é reconhecido?** O banco retorna `NULL`, que vira `Nothing` em Haskell.
+4. **Como limpar uma review?** Apague seu texto no formulário e salve. O formulário vazio vira `Nothing` e a consulta grava `NULL`.
+5. **O que `UNIQUE` garante?** Só uma linha pode conter determinado ID da CheapShark.
+6. **Por que existe uma restrição no banco além da validação Haskell?** A validação dá uma resposta clara. A restrição também protege o banco quando outro cliente grava diretamente.
+7. **Quando a busca grava um jogo?** Só ao enviar o formulário para `POST /jogos`.
+8. **Por que os filtros são rápidos?** O JavaScript trabalha nos cards que a página já recebeu.
+9. **O que faz `bracket`?** Abre a conexão, roda a ação e fecha a conexão, mesmo se a ação falhar.
+10. **Por que o servidor usa 303?** Para fazer o navegador abrir uma página com `GET` após a alteração.
+11. **Onde a review é salva?** Na coluna `review` da mesma linha do jogo.
+12. **Como o jogo muda de categoria?** O formulário envia o novo valor e o `UPDATE` troca a coluna `status` do ID selecionado.
 
-- `SELECT id, nome, genero, plataforma FROM jogos ORDER BY id` devolve as quatro colunas, ordenadas pelo ID. `query_` executa a consulta sem parâmetros e cada linha vira uma tupla `Jogo`.
-- `INSERT INTO jogos (nome, genero, plataforma) VALUES (?, ?, ?)` usa a tupla `(nome, genero, plataforma)` para preencher os três lugares. O PostgreSQL gera o ID.
-- `UPDATE jogos SET nome = ?, genero = ?, plataforma = ? WHERE id = ?` usa os três novos valores e o ID. O `WHERE` escolhe a linha que será alterada.
-- `DELETE FROM jogos WHERE id = ?` usa `Only identificador` para enviar o único parâmetro. O `WHERE` limita a exclusão ao jogo selecionado.
+## Capturas de tela
 
-Em `execute`, os `?` recebem valores fornecidos separadamente do texto SQL. `postgresql-simple` codifica esses valores para uso na consulta. Assim, um nome como `D'Arc` é tratado como texto do jogo.
+Selecione um PNG, JPG ou WebP em **Minhas capturas de tela** e clique em **Adicionar captura**. O navegador envia um `multipart/form-data`, que inclui os bytes da imagem e o nome do campo `imagem`. O Servant usa `MultipartForm Mem` para ler um arquivo por envio, com limite de 5 MB. Repetir o envio adiciona outras capturas ao mesmo jogo.
 
-## Cadastro passo a passo
+O Haskell identifica o formato pelos bytes iniciais. Em seguida, o FFmpeg tenta decodificar a imagem usando apenas o formato identificado e acesso ao arquivo local. O tempo de decodificação é limitado a 15 segundos e o decodificador usa um limite de 40 milhões de pixels por imagem. No banco, a chave estrangeira `screenshots.jogo_id` aponta para `jogos.id`. O banco guarda apenas o nome gerado para o arquivo, que fica em `uploads/`. O nome original informado pelo navegador é ignorado.
 
-1. O navegador pede `GET /`. O Servant chama `listar`, que lê os jogos e entrega o HTML com o formulário vazio.
-2. Você digita `Celeste`, `Plataforma` e `PC` e clica em **Cadastrar**. O navegador envia `POST /jogos` com três campos.
-3. `fromForm` lê e valida os campos. Se tudo estiver correto, entrega `DadosJogo "Celeste" "Plataforma" "PC"` ao handler `cadastrar`.
-4. `comBanco` abre a conexão. `execute` faz o `INSERT` e o PostgreSQL gera o ID. `bracket` fecha a conexão.
-5. `voltarInicio` envia o 303. O navegador segue `Location: /` com um novo `GET`. A listagem é consultada de novo e agora contém `Celeste`.
+A página carrega apenas os IDs das capturas do jogo. O navegador usa a rota de imagem para buscar as miniaturas e pode abrir a mesma imagem em um diálogo maior. A rota procura pela combinação de IDs do jogo e da captura. O Servant nunca recebe um caminho de arquivo pela URL.
 
-## Perguntas que o professor pode fazer
+A exclusão da captura usa `DELETE ... RETURNING caminho` para remover o vínculo e descobrir qual arquivo apagar. A exclusão do jogo trava a linha dele com `FOR UPDATE`, obtém os nomes e apaga os registros em uma transação. Depois, o Haskell remove os arquivos locais. `ON DELETE CASCADE` também protege os vínculos se um jogo for excluído por outro comando SQL.
 
-1. **Por que há `data DadosJogo`?** Para agrupar os três textos que o formulário envia em um valor que o handler pode receber.
-2. **Qual é a diferença entre `DadosJogo` e `Jogo`?** `DadosJogo` tem os três campos editáveis. `Jogo` é o nome da tupla que também inclui o ID retornado pelo banco.
-3. **O que significa `IO` na assinatura de `main`?** Quer dizer que executar `main` pode interagir com o ambiente, como ler um arquivo e abrir um servidor.
-4. **O que `do` faz em `main`?** Encadeia as ações de localizar e ler o CSS, imprimir a URL e iniciar o Warp.
-5. **Por que se usa `<-` em `jogos <- comBanco (...)`?** Para obter a lista que a ação do banco devolve e usá-la no restante do handler.
-6. **O que `pure (DadosJogo ...)` devolve?** Nesse bloco de validação, devolve um resultado bem-sucedido, equivalente a `Right (DadosJogo ...)`.
-7. **Por que o parâmetro de `listar` é `Maybe Int32`?** Porque a URL pode trazer `?editar=3` ou abrir a página inicial sem esse parâmetro.
-8. **O que `Left` representa em `validarCampo`?** Uma mensagem explicando o erro que impede aceitar aquele campo.
-9. **Por que aparecem `show` e `Texto.pack` juntos?** `show` escreve o número como `String` e `Texto.pack` produz o `Text` exigido pelo atributo do link.
-10. **O que `:>` significa em `"jogos" :> Capture "id" Int32`?** O caminho começa com `jogos` e o próximo trecho é interpretado como um ID inteiro.
-11. **O que `:<|>` faz em `servidor`?** Liga os handlers na ordem em que as rotas foram declaradas.
-12. **Para que serve `Proxy :: Proxy API`?** Ele informa que `serve` deve usar a descrição de rotas `API`.
-13. **O que é `Handler`?** É o tipo da ação usada pelo Servant para executar a lógica de uma rota e retornar seu resultado ou uma resposta HTTP específica.
-14. **Por que o cadastro usa `POST`?** O clique envia os campos no corpo do pedido e resulta na criação de um registro.
-15. **Por que voltar com 303?** Para que o navegador consulte a página inicial com `GET` depois da alteração. Atualizar a página então repete a leitura.
-16. **Como o programa encontra a senha do banco?** A biblioteca cliente lê a entrada correspondente à conexão no arquivo de senhas do PostgreSQL.
-17. **O que `bracket abrir close executar` garante?** Que uma conexão aberta com sucesso seja fechada depois da operação, inclusive se a operação falhar.
-18. **Por que `query_` devolve quatro valores por linha?** O `SELECT` pede quatro colunas e `Jogo` tem quatro posições compatíveis.
-19. **Como o `INSERT` sabe qual ID usar?** A coluna `SERIAL` gera o valor automaticamente quando o `INSERT` fornece apenas os outros campos.
-20. **Por que `Only identificador` é usado no `DELETE`?** `Only` é a forma que a biblioteca usa para agrupar um único parâmetro do SQL.
-21. **O que acontece se o jogo for excluído antes de salvar uma edição?** O `UPDATE` afeta zero linhas e o handler responde com 404.
-22. **Por que o servidor valida o comprimento se o campo já tem `maxlength`?** O navegador aplica o atributo durante a digitação, e o servidor também pode receber pedidos HTTP produzidos por outras ferramentas.
-23. **O que `find` usa para selecionar um jogo?** A função `\(idJogo, _, _, _) -> idJogo == identificador` compara apenas o ID da tupla.
-24. **Como `mapM_ mostrarJogo jogos` monta a lista?** Chama `mostrarJogo` para cada item em ordem e coloca o HTML produzido dentro de `ul_`.
-25. **Como o HTML exibe sinais como `<` digitados no nome?** `toHtml` faz o escape desses caracteres, de modo que o navegador os mostre como texto.
+| Nova função | O que faz |
+| --- | --- |
+| `opcoesMultipart` | Configura o máximo de um arquivo e 5 MB no leitor de formulários. |
+| `comDisco` | Executa uma ação de E/S e devolve erro HTTP 500 se o sistema de arquivos ou a chamada do FFmpeg gerar uma exceção. |
+| `formatoImagem` | Inspeciona a assinatura do arquivo e devolve a extensão e o formato esperado pelo FFmpeg. |
+| `enviarCaptura` | Lê o único arquivo enviado, inspeciona o tamanho e o formato e chama `salvarCaptura`. |
+| `salvarCaptura` | Cria um nome único, grava o arquivo, testa a decodificação e registra o vínculo. Remove o arquivo em caso de imagem inválida ou falha no registro. |
+| `tipoImagem` | Aceita somente nomes simples e extensões conhecidas. Informa o tipo HTTP da imagem. |
+| `removerCaptura` | Apaga pelo nome gerado dentro de `uploads/`. Um arquivo que já desapareceu conta como removido. |
+| `excluirCaptura` | Remove apenas a captura do jogo informado e redireciona para os detalhes. |
+| `lerCaptura` | Busca o arquivo pelo par de IDs, recusa links simbólicos e checa tamanho e formato antes de devolvê-lo. |
+| `verCaptura` | Responde `GET` e `HEAD` com os bytes e o tipo da imagem. O ponto de entrada `Raw` permite escolher esse tipo conforme o arquivo armazenado. |
+| `galeriaCapturas` | Renderiza o formulário de upload e as miniaturas. O JavaScript cria o diálogo das imagens. |
+| `mostrarCaptura` | Monta o link de uma miniatura e seu botão de exclusão. |
+| `voltarJogo` | Após salvar ou excluir uma captura, envia um redirecionamento para a página do jogo. |
+
+`ByteString` representa bytes de arquivo. `</>` combina partes de um caminho. `bracketOnError` chama a limpeza quando há uma exceção. `runHandler` transforma o resultado de uma ação do Servant em `Either`, para que `verCaptura` envie a resposta HTTP adequada.
+
+### Perguntas sobre as capturas
+
+1. **O nome do arquivo enviado é usado?** O Haskell gera o nome e escolhe a extensão pelo conteúdo.
+2. **Como o aplicativo sabe se é uma imagem?** Confere a assinatura e confirma que o FFmpeg consegue decodificar os dados.
+3. **Por que há dois IDs na rota de imagem?** Para devolver uma captura apenas quando ela pertence ao jogo da URL.
+4. **Onde os bytes são guardados?** Em `uploads/`. O PostgreSQL guarda o nome do arquivo e o ID do jogo.
+5. **O que acontece ao excluir um jogo pelo aplicativo?** As linhas de capturas saem do banco e seus arquivos são removidos de `uploads/`.

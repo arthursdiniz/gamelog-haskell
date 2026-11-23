@@ -2,8 +2,9 @@ cabal-version: 3.0
 name: biblioteca-jogos
 version: 0.1.0.0
 build-type: Simple
-data-files: style.css
-extra-source-files: banco.sql, README.md, EXPLICACAO.md
+data-files: style.css, script.js
+extra-source-files: banco.sql, migracao-capas.sql, migracao-biblioteca.sql,
+                    migracao-screenshots.sql, README.md, EXPLICACAO.md
 
 executable biblioteca-jogos
   main-is: Main.hs
@@ -13,10 +14,18 @@ executable biblioteca-jogos
   ghc-options: -Wall -threaded
   build-depends:
       base >= 4.14 && < 5
+    , bytestring
+    , directory
+    , filepath
     , http-api-data
+    , http-types
     , lucid
     , postgresql-simple
+    , process
     , servant-lucid
+    , servant-multipart >= 0.13
     , servant-server
     , text
+    , wai
+    , wai-extra
     , warp
