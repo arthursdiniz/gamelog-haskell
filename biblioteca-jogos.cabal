@@ -1,0 +1,22 @@
+cabal-version: 3.0
+name: biblioteca-jogos
+version: 0.1.0.0
+build-type: Simple
+data-files: style.css
+extra-source-files: banco.sql, README.md, EXPLICACAO.md
+
+executable biblioteca-jogos
+  main-is: Main.hs
+  autogen-modules: Paths_biblioteca_jogos
+  other-modules: Paths_biblioteca_jogos
+  default-language: Haskell2010
+  ghc-options: -Wall -threaded
+  build-depends:
+      base >= 4.14 && < 5
+    , http-api-data
+    , lucid
+    , postgresql-simple
+    , servant-lucid
+    , servant-server
+    , text
+    , warp
