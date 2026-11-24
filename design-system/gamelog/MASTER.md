@@ -11,4 +11,4 @@ Biblioteca pessoal com o aspecto de uma coleção editorial de jogos. As capas r
 | Espaçamento | Escala de 4, 8, 12, 16, 24, 32 e 48 px. Contornos finos e raios de 8 a 16 px. |
 | Interação | Foco visível, estados identificáveis por texto, alvos amplos e transições curtas de 160 ms. Movimento desativado com a preferência do sistema. |
 
-A biblioteca ocupa a coluna principal. Descoberta e cadastro ficam lado a lado com a coleção no desktop e passam para baixo no tablet e no celular. Os detalhes apresentam capa e nota em destaque, com galeria, review e edição agrupadas abaixo. Os modos de ampliação e confirmação usam diálogos nativos.
+A biblioteca ocupa a coluna principal. Descoberta e cadastro ficam lado a lado com a coleção no desktop e passam para baixo no tablet e no celular. Os detalhes apresentam capa e nota em destaque, com review e edição agrupadas abaixo. A confirmação de exclusão usa um diálogo nativo.

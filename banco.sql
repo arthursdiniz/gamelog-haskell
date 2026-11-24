@@ -10,11 +10,3 @@ CREATE TABLE jogos (
     review VARCHAR(2000),
     cheapshark_id VARCHAR(12) UNIQUE
 );
-
-CREATE TABLE screenshots (
-    id SERIAL PRIMARY KEY,
-    jogo_id INTEGER NOT NULL REFERENCES jogos(id) ON DELETE CASCADE,
-    caminho TEXT NOT NULL UNIQUE
-);
-
-CREATE INDEX screenshots_jogo_id_idx ON screenshots(jogo_id);

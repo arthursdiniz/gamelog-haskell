@@ -18,11 +18,11 @@ O navegador envia um formulário com `POST`. `FromForm` converte os pares de cam
 - `SELECT` lê todos os jogos da biblioteca ou um único jogo pelo ID. `trim_scale(nota)::text` transforma a nota em texto para o formulário e remove zeros à direita, por exemplo `3.50` vira `3.5`.
 - `INSERT` salva os campos do novo jogo. `ON CONFLICT (cheapshark_id) DO NOTHING` protege contra duas inclusões do mesmo identificador, inclusive se dois pedidos chegarem juntos. Nesse caso, o handler devolve 409.
 - `UPDATE` grava nome, categoria, nota e review pelo ID. O identificador externo e a capa cadastrada são preservados na edição.
-- `DELETE` remove a linha pelo ID e volta à biblioteca. A nota e a review fazem parte dessa mesma linha. O handler também remove as capturas ligadas ao jogo.
+- `DELETE` remove a linha pelo ID e volta à biblioteca. A nota e a review fazem parte dessa mesma linha.
 
 ## Como o Servant funciona
 
-`API` descreve as rotas e seus tipos. `serveWithContext` conecta a descrição às funções que atendem os pedidos e entrega ao Servant as opções do multipart. O Warp escuta em `127.0.0.1:8080`.
+`API` descreve as rotas e seus tipos. `serve` conecta a descrição às funções que atendem os pedidos. O Warp escuta em `127.0.0.1:8080`.
 
 | Rota | Função |
 | --- | --- |
@@ -30,10 +30,7 @@ O navegador envia um formulário com `POST`. `FromForm` converte os pares de cam
 | `GET /jogos/7` | `detalhes` busca o jogo 7 e renderiza a página individual. |
 | `POST /jogos` | `cadastrar` insere um jogo. |
 | `POST /jogos/7/editar` | `editar` atualiza o jogo 7. |
-| `POST /jogos/7/excluir` | `excluir` remove o jogo 7 e suas capturas. |
-| `POST /jogos/7/screenshots` | `enviarCaptura` recebe uma imagem para o jogo 7. |
-| `GET /jogos/7/screenshots/3` | `verCaptura` entrega a imagem 3 se ela pertencer ao jogo 7. |
-| `POST /jogos/7/screenshots/3/excluir` | `excluirCaptura` remove a captura 3 do jogo 7. |
+| `POST /jogos/7/excluir` | `excluir` remove o jogo 7. |
 
 `Capture "id" Int32` lê o número de um segmento da URL. `QueryParam "editar" Int32` entrega um valor opcional. `ReqBody '[FormUrlEncoded] DadosJogo` indica o formato padrão dos formulários. Ao concluir um `POST`, o servidor responde com HTTP 303 e um cabeçalho `Location`. O navegador faz um novo `GET`, então atualizar a página repete a leitura.
 
@@ -48,10 +45,11 @@ O navegador envia um formulário com `POST`. `FromForm` converte os pares de cam
 | `validarCampo` | Remove espaços nas bordas e recusa texto vazio, longo demais ou que contenha o caractere nulo. |
 | `capaValida` | Mantém uma URL de capa opcional com prefixo HTTPS e tamanho permitido. |
 | `listar` | Consulta a biblioteca para a página principal ou encaminha uma URL de edição para `detalhes`. |
-| `detalhes` | Consulta o jogo e os identificadores de suas capturas com `Only identificador` e gera a página individual. Responde 404 quando o jogo não existe. |
+| `detalhes` | Consulta o jogo com `Only identificador` e gera a página individual. Responde 404 quando o jogo não existe. |
 | `cadastrar` | Insere um `DadosJogo` e volta à biblioteca. Retorna 409 quando já existe o identificador externo. |
 | `editar` | Atualiza o jogo que tem o ID da URL. Retorna 404 quando nenhuma linha foi alterada. |
 | `excluir` | Remove um jogo pelo ID e usa `voltarInicio` se houver uma linha excluída. |
+| `voltarJogo` | Envia o 303 para a página do jogo editado. |
 | `voltarInicio` | Envia o 303 com o caminho `/`. |
 | `documentoHtml` | Monta o documento HTML compartilhado com cabeçalho, CSS, JavaScript e conteúdo. |
 | `pagina` | Mostra os filtros, os cards e o formulário de cadastro. |
@@ -102,39 +100,3 @@ Em `filtrarBiblioteca`, o JavaScript combina o nome digitado com a categoria sel
 10. **Por que o servidor usa 303?** Para fazer o navegador abrir uma página com `GET` após a alteração.
 11. **Onde a review é salva?** Na coluna `review` da mesma linha do jogo.
 12. **Como o jogo muda de categoria?** O formulário envia o novo valor e o `UPDATE` troca a coluna `status` do ID selecionado.
-
-## Capturas de tela
-
-Selecione um PNG, JPG ou WebP em **Minhas capturas de tela** e clique em **Adicionar captura**. O navegador envia um `multipart/form-data`, que inclui os bytes da imagem e o nome do campo `imagem`. O Servant usa `MultipartForm Mem` para ler um arquivo por envio, com limite de 5 MB. Repetir o envio adiciona outras capturas ao mesmo jogo.
-
-O Haskell identifica o formato pelos bytes iniciais. Em seguida, o FFmpeg tenta decodificar a imagem usando apenas o formato identificado e acesso ao arquivo local. O tempo de decodificação é limitado a 15 segundos e o decodificador usa um limite de 40 milhões de pixels por imagem. No banco, a chave estrangeira `screenshots.jogo_id` aponta para `jogos.id`. O banco guarda apenas o nome gerado para o arquivo, que fica em `uploads/`. O nome original informado pelo navegador é ignorado.
-
-A página carrega apenas os IDs das capturas do jogo. O navegador usa a rota de imagem para buscar as miniaturas e pode abrir a mesma imagem em um diálogo maior. A rota procura pela combinação de IDs do jogo e da captura. O Servant nunca recebe um caminho de arquivo pela URL.
-
-A exclusão da captura usa `DELETE ... RETURNING caminho` para remover o vínculo e descobrir qual arquivo apagar. A exclusão do jogo trava a linha dele com `FOR UPDATE`, obtém os nomes e apaga os registros em uma transação. Depois, o Haskell remove os arquivos locais. `ON DELETE CASCADE` também protege os vínculos se um jogo for excluído por outro comando SQL.
-
-| Nova função | O que faz |
-| --- | --- |
-| `opcoesMultipart` | Configura o máximo de um arquivo e 5 MB no leitor de formulários. |
-| `comDisco` | Executa uma ação de E/S e devolve erro HTTP 500 se o sistema de arquivos ou a chamada do FFmpeg gerar uma exceção. |
-| `formatoImagem` | Inspeciona a assinatura do arquivo e devolve a extensão e o formato esperado pelo FFmpeg. |
-| `enviarCaptura` | Lê o único arquivo enviado, inspeciona o tamanho e o formato e chama `salvarCaptura`. |
-| `salvarCaptura` | Cria um nome único, grava o arquivo, testa a decodificação e registra o vínculo. Remove o arquivo em caso de imagem inválida ou falha no registro. |
-| `tipoImagem` | Aceita somente nomes simples e extensões conhecidas. Informa o tipo HTTP da imagem. |
-| `removerCaptura` | Apaga pelo nome gerado dentro de `uploads/`. Um arquivo que já desapareceu conta como removido. |
-| `excluirCaptura` | Remove apenas a captura do jogo informado e redireciona para os detalhes. |
-| `lerCaptura` | Busca o arquivo pelo par de IDs, recusa links simbólicos e checa tamanho e formato antes de devolvê-lo. |
-| `verCaptura` | Responde `GET` e `HEAD` com os bytes e o tipo da imagem. O ponto de entrada `Raw` permite escolher esse tipo conforme o arquivo armazenado. |
-| `galeriaCapturas` | Renderiza o formulário de upload e as miniaturas. O JavaScript cria o diálogo das imagens. |
-| `mostrarCaptura` | Monta o link de uma miniatura e seu botão de exclusão. |
-| `voltarJogo` | Após salvar ou excluir uma captura, envia um redirecionamento para a página do jogo. |
-
-`ByteString` representa bytes de arquivo. `</>` combina partes de um caminho. `bracketOnError` chama a limpeza quando há uma exceção. `runHandler` transforma o resultado de uma ação do Servant em `Either`, para que `verCaptura` envie a resposta HTTP adequada.
-
-### Perguntas sobre as capturas
-
-1. **O nome do arquivo enviado é usado?** O Haskell gera o nome e escolhe a extensão pelo conteúdo.
-2. **Como o aplicativo sabe se é uma imagem?** Confere a assinatura e confirma que o FFmpeg consegue decodificar os dados.
-3. **Por que há dois IDs na rota de imagem?** Para devolver uma captura apenas quando ela pertence ao jogo da URL.
-4. **Onde os bytes são guardados?** Em `uploads/`. O PostgreSQL guarda o nome do arquivo e o ID do jogo.
-5. **O que acontece ao excluir um jogo pelo aplicativo?** As linhas de capturas saem do banco e seus arquivos são removidos de `uploads/`.

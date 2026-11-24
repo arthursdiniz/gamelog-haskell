@@ -5,11 +5,8 @@
 
 module Main where
 
-import Control.Exception (IOException, bracket, bracketOnError, try)
-import Control.Monad (forM_)
+import Control.Exception (bracket, try)
 import Control.Monad.IO.Class (liftIO)
-import qualified Data.ByteString as Bytes
-import qualified Data.ByteString.Lazy as Arquivo
 import Data.Int (Int32)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
@@ -17,40 +14,17 @@ import Data.Text (Text)
 import qualified Data.Text as Texto
 import qualified Data.Text.IO as ArquivoTexto
 import Database.PostgreSQL.Simple
-    (Connection, Only (Only), SqlError, close, connectPostgreSQL, execute, query, query_, withTransaction)
+    (Connection, Only (Only), SqlError, close, connectPostgreSQL, execute, query, query_)
 import Lucid
-import Network.HTTP.Types (mkStatus, status200, status404, status405)
-import qualified Network.Wai as Wai
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setHost, setPort)
-import Network.Wai.Parse (setMaxRequestFileSize, setMaxRequestFilesSize, setMaxRequestNumFiles)
 import Paths_biblioteca_jogos (getDataFileName)
 import Servant
 import Servant.HTML.Lucid (HTML)
-import Servant.Multipart (FileData (..), Mem, MultipartData (..), MultipartForm, MultipartOptions (..), defaultMultipartOptions)
-import System.Directory (createDirectoryIfMissing, doesFileExist, pathIsSymbolicLink, removeFile)
-import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath (takeExtension, takeFileName, (</>))
-import System.IO (IOMode (ReadMode), hClose, hSetEncoding, openBinaryTempFile, utf8, withBinaryFile, withFile)
-import System.IO.Error (isDoesNotExistError)
-import System.Process (readProcessWithExitCode)
-import System.Timeout (timeout)
+import System.IO (IOMode (ReadMode), hSetEncoding, utf8, withFile)
 import Web.FormUrlEncoded (FromForm (fromForm), lookupMaybe, parseUnique)
 
 data DadosJogo = DadosJogo Text (Maybe Text) Text (Maybe Text) (Maybe Text) (Maybe Text)
 type Jogo = (Int32, Text, Maybe Text, Text, Maybe Text, Maybe Text)
-
-limiteCaptura :: Int
-limiteCaptura = 5 * 1024 * 1024
-
-pastaCapturas :: FilePath
-pastaCapturas = "uploads"
-
-opcoesMultipart :: MultipartOptions Mem
-opcoesMultipart =
-    let opcoes = defaultMultipartOptions (Proxy :: Proxy Mem)
-        limite = fromIntegral limiteCaptura
-    in opcoes {generalOptions = setMaxRequestNumFiles 1
-        (setMaxRequestFilesSize limite (setMaxRequestFileSize limite (generalOptions opcoes)))}
 
 categorias :: [(Text, Text)]
 categorias = [("quero-jogar", "Quero jogar"), ("jogando", "Jogando"), ("jogados", "Jogados")]
@@ -109,15 +83,9 @@ type API =
   :<|> "jogos" :> Capture "id" Int32 :> "editar" :> ReqBody '[FormUrlEncoded] DadosJogo :> Post '[HTML] NoContent
   :<|> "jogos" :> Capture "id" Int32 :> "excluir" :> Post '[HTML] NoContent
   :<|> "jogos" :> Capture "id" Int32 :> Get '[HTML] (Html ())
-  :<|> "jogos" :> Capture "id" Int32 :> "screenshots" :> MultipartForm Mem (MultipartData Mem) :> Post '[HTML] NoContent
-  :<|> "jogos" :> Capture "id" Int32 :> "screenshots" :> Capture "captura" Int32 :> "excluir" :> Post '[HTML] NoContent
-  :<|> "jogos" :> Capture "id" Int32 :> "screenshots" :> Capture "captura" Int32 :> Raw
 
 main :: IO ()
 main = do
-    createDirectoryIfMissing True pastaCapturas
-    pastaEhLink <- pathIsSymbolicLink pastaCapturas
-    if pastaEhLink then ioError (userError "A pasta uploads nao pode ser um link.") else pure ()
     caminhoCSS <- getDataFileName "style.css"
     css <- ArquivoTexto.readFile caminhoCSS
     caminhoJS <- getDataFileName "script.js"
@@ -126,16 +94,15 @@ main = do
         ArquivoTexto.hGetContents arquivo
     let configuracao = setHost "127.0.0.1" (setPort 8080 defaultSettings)
     putStrLn "Abra http://127.0.0.1:8080"
-    runSettings configuracao (serveWithContext (Proxy :: Proxy API)
-        (opcoesMultipart :. EmptyContext) (servidor css javascript))
+    runSettings configuracao (serve (Proxy :: Proxy API) (servidor css javascript))
 
 servidor :: Text -> Text -> Server API
 servidor css javascript = listar css javascript :<|> cadastrar :<|> editar :<|> excluir
-    :<|> detalhes css javascript False :<|> enviarCaptura :<|> excluirCaptura :<|> verCaptura
+    :<|> detalhes css javascript False
 
 comBanco :: (Connection -> IO a) -> Handler a
 comBanco operacao = do
-    resultado <- comDisco (try (bracket abrir close executar))
+    resultado <- liftIO (try (bracket abrir close executar))
     case resultado of
         Left (_ :: SqlError) -> throwError err503 {errBody = "Banco de dados indisponivel."}
         Right (Left (_ :: SqlError)) -> throwError err500 {errBody = "Erro ao executar a consulta."}
@@ -157,10 +124,7 @@ detalhes css javascript editando identificador = do
         "SELECT id, nome, capa_url, status, trim_scale(nota)::text, review FROM jogos WHERE id = ?"
         (Only identificador))
     case jogos of
-        [jogo] -> do
-            capturas <- comBanco (\conexao -> query conexao
-                "SELECT id FROM screenshots WHERE jogo_id = ? ORDER BY id DESC" (Only identificador))
-            pure (paginaJogo css javascript editando jogo capturas)
+        [jogo] -> pure (paginaJogo css javascript editando jogo)
         _ -> throwError err404 {errBody = "Jogo inexistente."}
 
 cadastrar :: DadosJogo -> Handler NoContent
@@ -184,19 +148,11 @@ editar identificador (DadosJogo nome _ status nota review _) = do
 
 excluir :: Int32 -> Handler NoContent
 excluir identificador = do
-    jogoRemovido <- comBanco $ \conexao -> withTransaction conexao $ do
-        jogos <- query conexao "SELECT id FROM jogos WHERE id = ? FOR UPDATE" (Only identificador)
-        case jogos :: [Only Int32] of
-            [] -> pure Nothing
-            _ -> do
-                arquivos <- query conexao "DELETE FROM screenshots WHERE jogo_id = ? RETURNING caminho" (Only identificador)
-                _ <- execute conexao "DELETE FROM jogos WHERE id = ?" (Only identificador)
-                pure (Just arquivos)
-    case jogoRemovido of
-        Nothing -> throwError err404 {errBody = "Jogo inexistente."}
-        Just arquivos -> do
-            forM_ arquivos $ \(Only caminho) -> comDisco (removerCaptura caminho)
-            voltarInicio
+    excluidos <- comBanco (\conexao -> execute conexao
+        "DELETE FROM jogos WHERE id = ?" (Only identificador))
+    if excluidos == 0
+        then throwError err404 {errBody = "Jogo inexistente."}
+        else voltarInicio
 
 voltarJogo :: Int32 -> Handler NoContent
 voltarJogo identificador =
@@ -204,132 +160,6 @@ voltarJogo identificador =
 
 voltarInicio :: Handler NoContent
 voltarInicio = throwError err303 {errHeaders = [("Location", "/")]}
-
-comDisco :: IO a -> Handler a
-comDisco acao = do
-    resultado <- liftIO (try acao)
-    case resultado of
-        Left (_ :: IOException) ->
-            throwError err500 {errBody = "Falha ao acessar os arquivos ou o FFmpeg."}
-        Right valor -> pure valor
-
-formatoImagem :: Arquivo.ByteString -> Maybe (String, String)
-formatoImagem conteudo
-    | "\137PNG\r\n\SUB\n" `Arquivo.isPrefixOf` conteudo = Just (".png", "png_pipe")
-    | "\255\216\255" `Arquivo.isPrefixOf` conteudo = Just (".jpg", "jpeg_pipe")
-    | "RIFF" `Arquivo.isPrefixOf` conteudo
-    , Arquivo.take 4 (Arquivo.drop 8 conteudo) == "WEBP" = Just (".webp", "webp_pipe")
-    | otherwise = Nothing
-
-enviarCaptura :: Int32 -> MultipartData Mem -> Handler NoContent
-enviarCaptura jogo formularioUpload =
-    case files formularioUpload of
-        [arquivo] | fdInputName arquivo == "imagem" -> do
-            let conteudo = fdPayload arquivo
-            if Arquivo.length conteudo > fromIntegral limiteCaptura
-                then throwError err413 {errBody = "A imagem deve ter ate 5 MB."}
-                else case formatoImagem conteudo of
-                    Nothing -> throwError err400 {errBody = "Envie uma imagem PNG, JPG ou WebP."}
-                    Just (extensao, formato) -> do
-                        resultado <- comBanco (\conexao -> salvarCaptura conexao jogo extensao formato conteudo)
-                        case resultado of
-                            Left erro -> throwError erro
-                            Right () -> voltarJogo jogo
-        _ -> throwError err400 {errBody = "Selecione uma imagem por envio."}
-
-salvarCaptura :: Connection -> Int32 -> String -> String -> Arquivo.ByteString -> IO (Either ServerError ())
-salvarCaptura conexao jogo extensao formato conteudo =
-    bracketOnError (openBinaryTempFile pastaCapturas ("captura" <> extensao)) limpar $ \(caminho, arquivo) -> do
-        Arquivo.hPut arquivo conteudo
-        hClose arquivo
-        valido <- timeout 15000000 (readProcessWithExitCode "ffmpeg"
-            ["-nostdin", "-v", "error", "-xerror", "-err_detect", "explode", "-threads", "1",
-             "-max_pixels", "40000000", "-protocol_whitelist", "file", "-f", formato,
-             "-i", caminho, "-f", "null", "-"] "")
-        case valido of
-            Just (ExitSuccess, _, "") -> do
-                let nomeArquivo = takeFileName caminho
-                inseridos <- execute conexao
-                    "INSERT INTO screenshots (jogo_id, caminho) SELECT id, ? FROM jogos WHERE id = ?"
-                    (nomeArquivo, jogo)
-                if inseridos == 1
-                    then pure (Right ())
-                    else do
-                        removerCaptura nomeArquivo
-                        pure (Left err404 {errBody = "Jogo inexistente."})
-            _ -> do
-                removerCaptura (takeFileName caminho)
-                pure (Left err400 {errBody = "Imagem invalida ou grande demais para decodificar."})
-  where
-    limpar (caminho, arquivo) = do
-        hClose arquivo
-        removerCaptura (takeFileName caminho)
-
-tipoImagem :: FilePath -> Maybe Bytes.ByteString
-tipoImagem nome
-    | takeFileName nome /= nome = Nothing
-    | not (all (\c -> c == '.' || c == '-' || c >= '0' && c <= '9'
-        || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') nome) = Nothing
-    | otherwise = lookup (takeExtension nome)
-        [(".png", "image/png"), (".jpg", "image/jpeg"), (".webp", "image/webp")]
-
-removerCaptura :: FilePath -> IO ()
-removerCaptura nome =
-    case tipoImagem nome of
-        Nothing -> ioError (userError "Caminho da captura invalido.")
-        Just _ -> do
-            resultado <- try (removeFile (pastaCapturas </> nome))
-            case resultado of
-                Left erro | not (isDoesNotExistError erro) -> ioError erro
-                _ -> pure ()
-
-excluirCaptura :: Int32 -> Int32 -> Handler NoContent
-excluirCaptura jogo captura = do
-    arquivos <- comBanco (\conexao -> query conexao
-        "DELETE FROM screenshots WHERE jogo_id = ? AND id = ? RETURNING caminho" (jogo, captura))
-    case arquivos of
-        [Only nome] -> do
-            comDisco (removerCaptura nome)
-            voltarJogo jogo
-        _ -> throwError err404 {errBody = "Captura inexistente."}
-
-lerCaptura :: Int32 -> Int32 -> Handler (Bytes.ByteString, Bytes.ByteString)
-lerCaptura jogo captura = do
-    arquivos <- comBanco (\conexao -> query conexao
-        "SELECT caminho FROM screenshots WHERE jogo_id = ? AND id = ?" (jogo, captura))
-    case arquivos of
-        [Only nome] | Just tipo <- tipoImagem nome -> do
-            let caminho = pastaCapturas </> nome
-            existe <- comDisco (doesFileExist caminho)
-            if not existe
-                then throwError err404
-                else do
-                    ehLink <- comDisco (pathIsSymbolicLink caminho)
-                    if ehLink
-                        then throwError err404
-                        else do
-                            conteudo <- comDisco (withBinaryFile caminho ReadMode
-                                (\arquivo -> Bytes.hGet arquivo (limiteCaptura + 1)))
-                            case formatoImagem (Arquivo.fromStrict conteudo) of
-                                Just (extensao, _) | extensao == takeExtension nome && Bytes.length conteudo <= limiteCaptura ->
-                                    pure (tipo, conteudo)
-                                _ -> throwError err404
-        _ -> throwError err404
-
-verCaptura :: Int32 -> Int32 -> Tagged Handler Wai.Application
-verCaptura jogo captura = Tagged $ \pedido responder ->
-    if not (null (Wai.pathInfo pedido))
-        then responder (Wai.responseLBS status404 [] "")
-        else if Wai.requestMethod pedido `notElem` ["GET", "HEAD"]
-            then responder (Wai.responseLBS status405 [("Allow", "GET, HEAD")] "")
-            else do
-                resultado <- runHandler (lerCaptura jogo captura)
-                case resultado of
-                    Left erro -> responder (Wai.responseLBS
-                        (mkStatus (errHTTPCode erro) (fromString (errReasonPhrase erro))) (errHeaders erro) (errBody erro))
-                    Right (tipo, conteudo) -> responder (Wai.responseLBS status200
-                        [("Content-Type", tipo), ("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
-                        (Arquivo.fromStrict conteudo))
 
 documentoHtml :: Text -> Text -> Html () -> Html ()
 documentoHtml css javascript conteudo = do
@@ -387,8 +217,8 @@ pagina css javascript jogos = documentoHtml css javascript $ do
                 formulario "/jogos" "" "quero-jogar" Nothing Nothing "Adicionar à biblioteca"
             footer_ $ a_ [href_ "https://www.cheapshark.com/"] "Pesquisa por CheapShark"
 
-paginaJogo :: Text -> Text -> Bool -> Jogo -> [Only Int32] -> Html ()
-paginaJogo css javascript editando (identificador, nome, capa, status, nota, review) capturas =
+paginaJogo :: Text -> Text -> Bool -> Jogo -> Html ()
+paginaJogo css javascript editando (identificador, nome, capa, status, nota, review) =
     documentoHtml css javascript $ do
         let endereco = "/jogos/" <> Texto.pack (show identificador)
         a_ [href_ "/", class_ "voltar"] "Voltar à biblioteca"
@@ -398,39 +228,14 @@ paginaJogo css javascript editando (identificador, nome, capa, status, nota, rev
                 span_ [class_ "categoria"] (toHtml (nomeStatus status))
                 h1_ (toHtml nome)
                 mostrarNota nota
-        div_ [class_ "layout-detalhe"] $ do
-            galeriaCapturas endereco capturas
-            div_ [class_ "coluna-pessoal"] $ do
-                section_ [class_ "painel painel-review"] $ do
-                    h2_ "Review pessoal"
-                    p_ [class_ "review"] (toHtml (fromMaybe "Nenhuma review registrada." review))
-                details_ ([class_ "painel editar"] <> if editando then [open_ ""] else []) $ do
-                    summary_ "Editar informações"
-                    formulario (endereco <> "/editar") nome status nota review "Salvar alterações"
+        section_ [class_ "painel painel-review"] $ do
+            h2_ "Review pessoal"
+            p_ [class_ "review"] (toHtml (fromMaybe "Nenhuma review registrada." review))
+        details_ ([class_ "painel editar"] <> if editando then [open_ ""] else []) $ do
+            summary_ "Editar informações"
+            formulario (endereco <> "/editar") nome status nota review "Salvar alterações"
         form_ [method_ "post", action_ (endereco <> "/excluir"), class_ "acao-excluir", data_ "confirmar" "jogo"] $
             button_ [type_ "submit", class_ "excluir"] "Excluir da biblioteca"
-
-galeriaCapturas :: Text -> [Only Int32] -> Html ()
-galeriaCapturas endereco capturas = section_ [class_ "painel", id_ "screenshots"] $ do
-    h2_ "Minhas capturas de tela"
-    form_ [id_ "enviar-captura", method_ "post", action_ (endereco <> "/screenshots"), enctype_ "multipart/form-data"] $ do
-        label_ [for_ "imagem"] "Imagem PNG, JPG ou WebP de até 5 MB"
-        div_ [class_ "linha-upload"] $ do
-            input_ [id_ "imagem", name_ "imagem", type_ "file", accept_ "image/png,image/jpeg,image/webp", required_ ""]
-            button_ [type_ "submit"] "Adicionar captura"
-        p_ [id_ "status-captura", role_ "status"] mempty
-    if null capturas
-        then p_ [class_ "capturas-vazio"] "Nenhuma captura ainda."
-        else ul_ [class_ "grade grade-capturas"] (mapM_ (mostrarCaptura endereco) capturas)
-
-mostrarCaptura :: Text -> Only Int32 -> Html ()
-mostrarCaptura endereco (Only captura) = do
-    let url = endereco <> "/screenshots/" <> Texto.pack (show captura)
-    li_ [class_ "captura"] $ do
-        a_ [href_ url, class_ "link-captura"] $
-            img_ [src_ url, alt_ "Ampliar captura de tela", width_ "320", height_ "180", loading_ "lazy"]
-        form_ [method_ "post", action_ (url <> "/excluir"), data_ "confirmar" "captura"] $
-            button_ [type_ "submit", class_ "excluir"] "Excluir captura"
 
 buscaCatalogo :: Html ()
 buscaCatalogo = section_ [class_ "painel descoberta"] $ do

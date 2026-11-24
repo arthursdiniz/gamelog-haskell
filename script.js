@@ -180,43 +180,6 @@ if (campoNota && seletor) {
     atualizarEstrelas();
 }
 
-const enviarCaptura = document.querySelector("#enviar-captura");
-enviarCaptura?.addEventListener("submit", (evento) => {
-    const imagem = document.querySelector("#imagem").files[0];
-    if (imagem && imagem.size > 5 * 1024 * 1024) {
-        evento.preventDefault();
-        document.querySelector("#status-captura").textContent = "A imagem deve ter até 5 MB.";
-    }
-});
-
-const linksCapturas = document.querySelectorAll(".link-captura");
-if (linksCapturas.length && typeof HTMLDialogElement !== "undefined") {
-    const capturaAmpliada = document.createElement("dialog");
-    capturaAmpliada.id = "captura-ampliada";
-    capturaAmpliada.setAttribute("aria-label", "Captura de tela ampliada");
-    const fechar = document.createElement("button");
-    fechar.textContent = "Fechar";
-    fechar.addEventListener("click", () => capturaAmpliada.close());
-    const imagem = document.createElement("img");
-    imagem.alt = "Captura de tela ampliada";
-    const topoDialogo = document.createElement("div");
-    topoDialogo.className = "dialogo-topo";
-    const titulo = document.createElement("h2");
-    titulo.textContent = "Captura de tela";
-    fechar.className = "botao-secundario";
-    topoDialogo.append(titulo, fechar);
-    capturaAmpliada.append(topoDialogo, imagem);
-    document.querySelector("#screenshots").append(capturaAmpliada);
-    linksCapturas.forEach((link) => {
-        link.addEventListener("click", (evento) => {
-            if (evento.ctrlKey || evento.metaKey || evento.shiftKey || evento.altKey) return;
-            evento.preventDefault();
-            imagem.src = link.href;
-            capturaAmpliada.showModal();
-        });
-    });
-}
-
 const formulariosExclusao = document.querySelectorAll("form[data-confirmar]");
 if (formulariosExclusao.length && typeof HTMLDialogElement !== "undefined") {
     const dialogo = document.createElement("dialog");
@@ -255,11 +218,8 @@ if (formulariosExclusao.length && typeof HTMLDialogElement !== "undefined") {
             }
             evento.preventDefault();
             pendente = formulario;
-            const jogo = formulario.dataset.confirmar === "jogo";
-            titulo.textContent = jogo ? "Excluir jogo da biblioteca?" : "Excluir captura?";
-            descricao.textContent = jogo
-                ? "O jogo e suas capturas serão removidos."
-                : "A imagem será removida deste jogo.";
+            titulo.textContent = "Excluir jogo da biblioteca?";
+            descricao.textContent = "O jogo será removido da sua biblioteca.";
             dialogo.showModal();
             cancelar.focus();
         });
