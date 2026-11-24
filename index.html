@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0e1314">
+    <title>GameLog | Minha Biblioteca</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/script.js" defer></script>
+</head>
+<body>
+    <a href="#conteudo" class="pular">Ir para o conteúdo</a>
+    <header class="topo">
+        <div class="topo-conteudo">
+            <a href="/" class="marca">GameLog</a>
+            <nav aria-label="Navegação principal">
+                <a href="/#biblioteca" class="nav-biblioteca">Biblioteca</a>
+                <a href="/#adicionar" class="botao-principal nav-adicionar">Adicionar jogo</a>
+            </nav>
+        </div>
+    </header>
+
+    <main id="conteudo" tabindex="-1">
+        <noscript><p class="vazio">Ative o JavaScript para usar a biblioteca.</p></noscript>
+        <section id="pagina-biblioteca" hidden>
+            <div class="cabecalho-biblioteca">
+                <h1>Minha biblioteca</h1>
+                <p class="total-biblioteca" role="status" hidden>
+                    <strong id="total-jogos"></strong>
+                    <span id="rotulo-total"></span>
+                </p>
+            </div>
+
+            <div class="layout-biblioteca">
+                <section class="biblioteca" id="biblioteca" aria-label="Jogos da biblioteca">
+                    <div class="filtros">
+                        <label for="filtro-nome" class="visualmente-oculto">Pesquisar na biblioteca</label>
+                        <input id="filtro-nome" type="search" autocomplete="off" placeholder="Pesquisar na biblioteca…">
+                        <div class="filtros-categorias" role="group" aria-label="Filtrar por categoria">
+                            <button type="button" value="" aria-pressed="true">Todos</button>
+                            <button type="button" value="quero-jogar" aria-pressed="false">Quero jogar</button>
+                            <button type="button" value="jogando" aria-pressed="false">Jogando</button>
+                            <button type="button" value="jogados" aria-pressed="false">Jogados</button>
+                        </div>
+                    </div>
+                    <ul class="grade" id="lista-jogos" aria-label="Resultados"></ul>
+                    <p id="filtro-vazio" class="vazio" role="status" hidden></p>
+                    <p id="situacao-biblioteca" class="vazio situacao" role="status"></p>
+                </section>
+
+                <aside id="adicionar">
+                    <h2>Adicionar jogo</h2>
+                    <div class="painel" id="cadastro"></div>
+                </aside>
+            </div>
+        </section>
+
+        <section id="pagina-jogo" hidden>
+            <a href="/" class="voltar">Voltar à biblioteca</a>
+            <p id="situacao-jogo" class="vazio situacao" role="status" hidden></p>
+            <div id="dados-jogo" hidden>
+                <section class="detalhe painel detalhe-info">
+                    <span class="categoria"></span>
+                    <h1 id="titulo-jogo"></h1>
+                    <p class="nota"></p>
+                </section>
+                <section class="painel painel-review">
+                    <h2>Review pessoal</h2>
+                    <p class="review"></p>
+                </section>
+                <details class="painel editar" id="edicao">
+                    <summary>Editar informações</summary>
+                </details>
+                <div class="acao-excluir">
+                    <button type="button" class="excluir" id="abrir-exclusao">Excluir da biblioteca</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <template id="modelo-card">
+        <li class="card">
+            <a class="card-link card-info">
+                <span class="categoria"></span>
+                <h3></h3>
+                <p class="nota"></p>
+            </a>
+        </li>
+    </template>
+
+    <template id="modelo-formulario">
+        <form>
+            <label for="nome">Nome</label>
+            <input id="nome" name="nome" autocomplete="off" maxlength="100" required>
+            <label for="status">Categoria do jogo</label>
+            <select id="status" name="status">
+                <option value="quero-jogar">Quero jogar</option>
+                <option value="jogando">Jogando</option>
+                <option value="jogados">Jogados</option>
+            </select>
+            <label for="nota">Nota pessoal</label>
+            <select id="nota" name="nota">
+                <option value="">Sem nota</option>
+                <option value="0">0</option>
+                <option value="0.5">0,5</option>
+                <option value="1">1</option>
+                <option value="1.5">1,5</option>
+                <option value="2">2</option>
+                <option value="2.5">2,5</option>
+                <option value="3">3</option>
+                <option value="3.5">3,5</option>
+                <option value="4">4</option>
+                <option value="4.5">4,5</option>
+                <option value="5">5</option>
+            </select>
+            <div id="seletor-estrelas"></div>
+            <label for="review">Review pessoal</label>
+            <textarea id="review" name="review" rows="4" maxlength="2000"></textarea>
+            <button type="submit"></button>
+            <p class="mensagem" role="status"></p>
+        </form>
+    </template>
+
+    <dialog id="confirmar-exclusao" aria-labelledby="titulo-exclusao">
+        <h2 id="titulo-exclusao">Excluir jogo da biblioteca?</h2>
+        <p>O jogo será removido da sua biblioteca.</p>
+        <div class="dialogo-acoes">
+            <button type="button" class="botao-secundario" id="cancelar-exclusao" autofocus>Cancelar</button>
+            <button type="button" class="excluir" id="excluir-jogo">Confirmar exclusão</button>
+        </div>
+        <p class="mensagem" role="status"></p>
+    </dialog>
+</body>
+</html>

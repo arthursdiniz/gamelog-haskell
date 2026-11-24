@@ -2,9 +2,9 @@ cabal-version: 3.0
 name: biblioteca-jogos
 version: 0.1.0.0
 build-type: Simple
-data-files: style.css, script.js
-extra-source-files: banco.sql, migracao-capas.sql, migracao-biblioteca.sql,
-                    migracao-preservar-legado.sql, README.md, EXPLICACAO.md
+data-files: index.html, style.css, script.js
+extra-source-files: banco.sql, migracao-biblioteca.sql,
+                    migracao-preservar-legado.sql, README.md
 
 executable biblioteca-jogos
   main-is: Main.hs
@@ -13,11 +13,12 @@ executable biblioteca-jogos
   default-language: Haskell2010
   ghc-options: -Wall -threaded
   build-depends:
-      base >= 4.14 && < 5
-    , http-api-data
-    , lucid
+      aeson
+    , base >= 4.14 && < 5
+    , http-types
     , postgresql-simple
-    , servant-lucid
+    , scientific
     , servant-server
     , text
+    , wai
     , warp

@@ -2,6 +2,8 @@
 
 Biblioteca pessoal para organizar jogos em **Quero jogar**, **Jogando** e **Jogados**, com notas de meia em meia estrela e reviews pessoais. O servidor escuta em `127.0.0.1`, para uso local, em um único perfil.
 
+O Servant oferece uma API JSON e serve `index.html`, `style.css` e `script.js` na mesma porta. O navegador usa `fetch` para ler e salvar jogos. Compilar o executável Haskell é o único passo de build.
+
 ## Executar no Windows 11
 
 ### 1. Instalar as ferramentas
@@ -36,7 +38,7 @@ createdb -W biblioteca_jogos
 psql -W -d biblioteca_jogos -v ON_ERROR_STOP=1 -f .\banco.sql
 ```
 
-Se o banco já possui a tabela `jogos`, use as migrações abaixo antes de iniciar a nova versão. Elas podem ser executadas novamente e preservam os dados antigos. A segunda desvincula os dados legados dos jogos para preservá-los mesmo quando um jogo for excluído.
+Se o banco já possui a tabela `jogos` com as colunas `id`, `nome`, `status`, `nota` e `review`, a troca para a API JSON usa os dados existentes diretamente. Para preparar um banco de uma versão anterior da tabela, use as migrações abaixo. A segunda desvincula os registros legados para preservá-los quando um jogo for excluído.
 
 ```powershell
 psql -W -d biblioteca_jogos -v ON_ERROR_STOP=1 -f .\migracao-biblioteca.sql
@@ -76,14 +78,32 @@ cabal run biblioteca-jogos "--extra-lib-dirs=$pastaCliente"
 
 O Cabal baixa as dependências durante o build. As opções de compilação apontam para a biblioteca cliente do PostgreSQL. Acesse [GameLog](http://127.0.0.1:8080/). Use `Ctrl+C` para parar o servidor. Em outro PowerShell, refaça a configuração do passo 2 e as duas primeiras linhas do passo 5.
 
+Se a porta 8080 estiver ocupada, defina `$env:GAMELOG_PORT = '18080'` antes de iniciar e abra `http://127.0.0.1:18080/`. Para usar outro banco, defina `PGDATABASE` antes de iniciar. O padrão é `biblioteca_jogos`.
+
 ## Uso e teste rápido
 
-1. Em **Adicionar jogo**, busque `Elden Ring` e selecione um resultado. O nome, a capa e o identificador do resultado são associados ao formulário. A CheapShark oferece pesquisa pública diretamente no navegador. [Documentação da CheapShark](https://apidocs.cheapshark.com/)
-2. Escolha uma categoria e clique em **Adicionar à biblioteca**. O mesmo resultado da CheapShark só pode ser salvo uma vez. É possível preencher o formulário manualmente em qualquer momento.
+1. Em **Adicionar jogo**, digite um nome, escolha a categoria e clique em **Adicionar à biblioteca**.
+2. A nota e a review são opcionais. Use as estrelas ou o seletor para escolher a nota.
 3. Em **Minha Biblioteca**, filtre por categoria e digite parte de um nome para combinar os dois filtros.
 4. Abra um card, expanda **Editar informações**, altere a categoria, escolha uma nota e escreva uma review. Escolha **Sem nota** para remover a avaliação ou esvazie a review para removê-la.
 5. Use **Excluir da biblioteca** e confirme para remover um jogo.
 
 As anotações são guardadas no PostgreSQL local. O aplicativo serve uma única biblioteca e permite acesso a ela a partir do próprio computador.
 
-O material para a avaliação oral está no [EXPLICACAO.md](EXPLICACAO.md).
+## API JSON
+
+| Método e caminho | Resposta |
+| --- | --- |
+| `GET /api/jogos` | **200** e a lista de jogos. |
+| `GET /api/jogos/:id` | **200** e o jogo, ou **404**. |
+| `POST /api/jogos` | **201** e o ID criado. |
+| `PUT /api/jogos/:id` | **204** ou **404**. |
+| `DELETE /api/jogos/:id` | **204** ou **404**. |
+
+No cadastro e na edição, envie `Content-Type: application/json` e um corpo como este.
+
+```json
+{"nome": "Ação e Aventura", "status": "jogando", "nota": 4.5, "review": "Ótima trilha sonora."}
+```
+
+Os valores de `status` são `quero-jogar`, `jogando` e `jogados`. Use `"nota": null` para deixar o jogo sem avaliação. `"nota": 0` registra uma avaliação de zero. Dados inválidos retornam **400**.

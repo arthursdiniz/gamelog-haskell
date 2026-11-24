@@ -1,168 +1,81 @@
-const buscaCatalogo = document.querySelector("#busca-catalogo");
-const resultados = document.querySelector("#resultados");
-const statusBusca = document.querySelector("#status-busca");
+const caminhoAPI = "/api/jogos";
+const categorias = {
+    "quero-jogar": "Quero jogar",
+    jogando: "Jogando",
+    jogados: "Jogados"
+};
 
-function miniaturaHttps(url) {
-    if (typeof url !== "string" || !url.startsWith("https://") ||
-        url.length > 2048 || /[\u0000-\u0020]/.test(url)) {
-        return "";
+async function requisitar(caminho, metodo = "GET", dados) {
+    const opcoes = { method: metodo, cache: "no-store" };
+    if (dados !== undefined) {
+        opcoes.headers = { "Content-Type": "application/json" };
+        opcoes.body = JSON.stringify(dados);
     }
+
+    let resposta;
     try {
-        const endereco = new URL(url);
-        return endereco.username || endereco.password || endereco.href.length > 2048 ? "" : endereco.href;
+        resposta = await fetch(caminho, opcoes);
     } catch {
-        return "";
+        throw new Error("Não foi possível acessar o servidor. Tente novamente.");
     }
+    if (!resposta.ok) {
+        const corpo = await resposta.json().catch(() => null);
+        throw new Error(corpo?.erro || "Não foi possível concluir a operação.");
+    }
+    if (resposta.status !== 204) return resposta.json();
 }
 
-function mostrarResultado(jogo) {
-    const nome = jogo.external.trim();
-    const url = miniaturaHttps(jogo.thumb);
-
-    const card = document.createElement("li");
-    card.className = "card";
-    const capa = document.createElement("div");
-    capa.className = "capa";
-    capa.textContent = "Sem capa";
-    if (url) {
-        const imagem = document.createElement("img");
-        imagem.alt = "";
-        imagem.width = 460;
-        imagem.height = 215;
-        imagem.loading = "lazy";
-        imagem.referrerPolicy = "no-referrer";
-        imagem.addEventListener("error", () => imagem.remove(), { once: true });
-        imagem.src = url;
-        capa.append(imagem);
-    }
-
-    const info = document.createElement("div");
-    info.className = "card-info";
-    const titulo = document.createElement("h3");
-    titulo.textContent = nome;
-    const selecionar = document.createElement("button");
-    selecionar.type = "button";
-    selecionar.textContent = "Selecionar";
-    selecionar.setAttribute("aria-label", "Selecionar " + nome);
-    selecionar.addEventListener("click", () => {
-        const campoNome = document.querySelector("#nome");
-        campoNome.value = nome.slice(0, 100);
-        document.querySelector("#capa_url").value = url;
-        document.querySelector("#cheapshark_id").value = /^[0-9]{1,12}$/.test(jogo.gameID)
-            ? jogo.gameID : "";
-        campoNome.focus();
-    });
-
-    info.append(titulo, selecionar);
-    card.append(capa, info);
-    resultados.append(card);
-}
-
-document.querySelectorAll(".capa img").forEach((imagem) => {
-    imagem.addEventListener("error", () => imagem.remove(), { once: true });
-    if (imagem.complete && imagem.naturalWidth === 0) imagem.remove();
-});
-
-const filtroNome = document.querySelector("#filtro-nome");
-const filtroStatus = document.querySelector("#filtro-status");
-const filtroVazio = document.querySelector("#filtro-vazio");
-const cards = document.querySelectorAll(".biblioteca .card");
-const totalJogos = document.querySelector("#total-jogos");
-const rotuloTotal = document.querySelector("#rotulo-total");
-const botoesCategoria = [];
-
-function filtrarBiblioteca() {
-    const termo = filtroNome.value.trim().toLocaleLowerCase("pt-BR");
-    const status = filtroStatus.value;
-    let encontrados = 0;
-    cards.forEach((card) => {
-        const corresponde = card.dataset.nome.toLocaleLowerCase("pt-BR").includes(termo);
-        card.hidden = !corresponde || (status !== "" && card.dataset.status !== status);
-        if (!card.hidden) encontrados++;
-    });
-    if (filtroVazio) filtroVazio.hidden = encontrados > 0;
-    totalJogos.textContent = new Intl.NumberFormat("pt-BR").format(encontrados);
-    rotuloTotal.textContent = encontrados === 1 ? "jogo" : "jogos";
-    for (const botao of botoesCategoria) {
-        botao.setAttribute("aria-pressed", botao.value === status);
-    }
-}
-
-if (filtroNome && filtroStatus) {
-    const grupo = document.createElement("div");
-    grupo.className = "filtros-categorias";
-    grupo.setAttribute("role", "group");
-    grupo.setAttribute("aria-label", "Filtrar por categoria");
-    for (const opcao of filtroStatus.options) {
-        const botao = document.createElement("button");
-        botao.type = "button";
-        botao.value = opcao.value;
-        botao.textContent = opcao.textContent;
-        botao.addEventListener("click", () => {
-            filtroStatus.value = botao.value;
-            atualizarFiltros();
-        });
-        botoesCategoria.push(botao);
-        grupo.append(botao);
-    }
-    const controle = filtroStatus.closest(".controle-categoria");
-    controle.after(grupo);
-    controle.hidden = true;
-
-    const url = new URL(location.href);
-    filtroNome.value = url.searchParams.get("q") ?? "";
-    const categoria = url.searchParams.get("categoria") ?? "";
-    if (botoesCategoria.some((botao) => botao.value === categoria)) filtroStatus.value = categoria;
-    filtrarBiblioteca();
-
-    function atualizarFiltros() {
-        filtrarBiblioteca();
-        const atual = new URL(location.href);
-        for (const campo of [filtroNome, filtroStatus]) {
-            if (campo.value) atual.searchParams.set(campo.name, campo.value);
-            else atual.searchParams.delete(campo.name);
-        }
-        if (atual.href !== location.href) history.replaceState(null, "", atual);
-    }
-
-    filtroNome.addEventListener("input", atualizarFiltros);
-    filtroStatus.addEventListener("change", atualizarFiltros);
+function mostrarMensagem(elemento, texto, erro = false) {
+    elemento.textContent = texto;
+    elemento.classList.toggle("erro", erro);
 }
 
 function preencherEstrelas(elemento, nota) {
     elemento.style.setProperty("--nota", (Number(nota) * 20) + "%");
 }
 
-document.querySelectorAll(".estrelas-nota").forEach((elemento) => {
-    elemento.setAttribute("aria-hidden", "true");
-    preencherEstrelas(elemento, elemento.dataset.nota);
-});
+function mostrarJogo(elemento, jogo, seletorTitulo) {
+    elemento.dataset.status = jogo.status;
+    elemento.querySelector(".categoria").textContent = categorias[jogo.status];
+    elemento.querySelector(seletorTitulo).textContent = jogo.nome;
 
-const campoNota = document.querySelector("#nota");
-const seletor = document.querySelector("#seletor-estrelas");
-if (campoNota && seletor) {
+    const nota = elemento.querySelector(".nota");
+    nota.textContent = "Sem nota";
+    if (jogo.nota != null) {
+        const estrelas = document.createElement("span");
+        estrelas.className = "estrelas-nota";
+        estrelas.textContent = "★★★★★";
+        estrelas.setAttribute("aria-hidden", "true");
+        preencherEstrelas(estrelas, jogo.nota);
+        nota.replaceChildren(estrelas, jogo.nota.toLocaleString("pt-BR") + " / 5");
+    }
+}
+
+function montarEstrelas(formulario) {
+    const campoNota = formulario.elements.nota;
+    const seletor = formulario.querySelector("#seletor-estrelas");
     const estrelas = document.createElement("span");
     estrelas.className = "estrelas-nota";
+    estrelas.setAttribute("aria-hidden", "true");
     for (let i = 0; i < 5; i++) {
         const estrela = document.createElement("span");
         estrela.textContent = "★";
         estrelas.append(estrela);
     }
-    estrelas.setAttribute("aria-hidden", "true");
+
     const metades = document.createElement("div");
     metades.className = "metades";
-
     for (let metade = 1; metade <= 10; metade++) {
         const botao = document.createElement("button");
         const valor = String(metade / 2);
         botao.type = "button";
-        botao.dataset.valor = valor;
+        botao.value = valor;
         botao.title = "Dar " + valor.replace(".", ",") + " estrelas";
         botao.setAttribute("aria-label", botao.title);
         botao.addEventListener("pointerenter", () => preencherEstrelas(estrelas, valor));
         botao.addEventListener("click", () => {
             campoNota.value = valor;
-            campoNota.dispatchEvent(new Event("change"));
+            atualizarEstrelas();
         });
         metades.append(botao);
     }
@@ -170,7 +83,7 @@ if (campoNota && seletor) {
     function atualizarEstrelas() {
         preencherEstrelas(estrelas, campoNota.value);
         for (const botao of metades.children) {
-            botao.setAttribute("aria-pressed", botao.dataset.valor === campoNota.value);
+            botao.setAttribute("aria-pressed", botao.value === campoNota.value);
         }
     }
 
@@ -180,99 +93,185 @@ if (campoNota && seletor) {
     atualizarEstrelas();
 }
 
-const formulariosExclusao = document.querySelectorAll("form[data-confirmar]");
-if (formulariosExclusao.length && typeof HTMLDialogElement !== "undefined") {
-    const dialogo = document.createElement("dialog");
-    dialogo.id = "confirmar-exclusao";
-    dialogo.setAttribute("aria-labelledby", "titulo-exclusao");
-    const titulo = document.createElement("h2");
-    titulo.id = "titulo-exclusao";
-    const descricao = document.createElement("p");
-    const acoes = document.createElement("div");
-    acoes.className = "dialogo-acoes";
-    const cancelar = document.createElement("button");
-    cancelar.type = "button";
-    cancelar.className = "botao-secundario";
-    cancelar.textContent = "Cancelar";
-    const confirmar = document.createElement("button");
-    confirmar.type = "button";
-    confirmar.className = "excluir";
-    confirmar.textContent = "Confirmar exclusão";
-    acoes.append(cancelar, confirmar);
-    dialogo.append(titulo, descricao, acoes);
-    document.body.append(dialogo);
+function montarFormulario(destino, jogo, enviar) {
+    const modelo = document.querySelector("#modelo-formulario");
+    const formulario = modelo.content.firstElementChild.cloneNode(true);
+    const campos = formulario.elements;
+    const botao = formulario.querySelector("button[type=submit]");
+    const mensagem = formulario.querySelector(".mensagem");
+    botao.textContent = jogo ? "Salvar alterações" : "Adicionar à biblioteca";
 
-    let pendente;
-    let confirmado;
-    cancelar.addEventListener("click", () => dialogo.close());
-    confirmar.addEventListener("click", () => {
-        confirmado = pendente;
-        dialogo.close();
-        confirmado.requestSubmit();
-    });
-    formulariosExclusao.forEach((formulario) => {
-        formulario.addEventListener("submit", (evento) => {
-            if (confirmado === formulario) {
-                confirmado = undefined;
-                return;
-            }
-            evento.preventDefault();
-            pendente = formulario;
-            titulo.textContent = "Excluir jogo da biblioteca?";
-            descricao.textContent = "O jogo será removido da sua biblioteca.";
-            dialogo.showModal();
-            cancelar.focus();
-        });
-    });
-}
+    if (jogo) {
+        campos.nome.value = jogo.nome;
+        campos.status.value = jogo.status;
+        campos.nota.value = jogo.nota ?? "";
+        campos.review.value = jogo.review ?? "";
+    }
+    montarEstrelas(formulario);
+    destino.append(formulario);
 
-const formularioEdicao = document.querySelector(".editar form");
-if (formularioEdicao) {
-    const valoresIniciais = new URLSearchParams(new FormData(formularioEdicao)).toString();
-    function avisarAlteracoes(evento) {
+    formulario.addEventListener("submit", async (evento) => {
         evento.preventDefault();
-        evento.returnValue = true;
-    }
-    function verificarAlteracoes() {
-        const valores = new URLSearchParams(new FormData(formularioEdicao)).toString();
-        if (valores !== valoresIniciais) window.addEventListener("beforeunload", avisarAlteracoes);
-        else window.removeEventListener("beforeunload", avisarAlteracoes);
-    }
-    formularioEdicao.addEventListener("input", verificarAlteracoes);
-    formularioEdicao.addEventListener("change", verificarAlteracoes);
-    formularioEdicao.addEventListener("submit", () => window.removeEventListener("beforeunload", avisarAlteracoes));
+        if (botao.disabled) return;
+        const dados = {
+            nome: campos.nome.value.trim(),
+            status: campos.status.value,
+            nota: campos.nota.value === "" ? null : Number(campos.nota.value),
+            review: campos.review.value.trim() || null
+        };
+
+        botao.disabled = true;
+        mostrarMensagem(mensagem, jogo ? "Salvando…" : "Cadastrando…");
+        try {
+            await enviar(dados);
+            if (!jogo) {
+                formulario.reset();
+                campos.nota.dispatchEvent(new Event("change"));
+            }
+            mostrarMensagem(mensagem, jogo ? "Alterações salvas." : "Jogo adicionado.");
+        } catch (erro) {
+            mostrarMensagem(mensagem, erro.message, true);
+        } finally {
+            botao.disabled = false;
+        }
+    });
 }
 
-buscaCatalogo?.addEventListener("submit", async (evento) => {
-    evento.preventDefault();
-    const termo = document.querySelector("#busca").value.trim();
-    const botao = buscaCatalogo.querySelector("button");
-    if (botao.disabled) return;
-    resultados.replaceChildren();
-    if (!termo || termo.length > 100) {
-        statusBusca.textContent = "Informe um nome de até 100 caracteres.";
+function abrirBiblioteca() {
+    const pagina = document.querySelector("#pagina-biblioteca");
+    const lista = document.querySelector("#lista-jogos");
+    const modelo = document.querySelector("#modelo-card");
+    const filtroNome = document.querySelector("#filtro-nome");
+    const botoes = document.querySelectorAll(".filtros-categorias button");
+    const vazio = document.querySelector("#filtro-vazio");
+    const total = document.querySelector(".total-biblioteca");
+    const situacao = document.querySelector("#situacao-biblioteca");
+    let categoria = "";
+    let carregada = false;
+
+    function filtrar() {
+        if (!carregada) return;
+        const termo = filtroNome.value.trim().toLocaleLowerCase("pt-BR");
+        let encontrados = 0;
+        for (const card of lista.children) {
+            const nomeCombina = card.dataset.nome.includes(termo);
+            const categoriaCombina = categoria === "" || card.dataset.status === categoria;
+            card.hidden = !nomeCombina || !categoriaCombina;
+            if (!card.hidden) encontrados++;
+        }
+        vazio.hidden = encontrados !== 0;
+        vazio.textContent = lista.children.length === 0
+            ? "Sua biblioteca está vazia."
+            : "Nenhum jogo corresponde aos filtros.";
+        document.querySelector("#total-jogos").textContent = encontrados.toLocaleString("pt-BR");
+        document.querySelector("#rotulo-total").textContent = encontrados === 1 ? "jogo" : "jogos";
+        total.hidden = false;
+    }
+
+    async function carregarJogos() {
+        situacao.hidden = false;
+        mostrarMensagem(situacao, "Carregando biblioteca…");
+        try {
+            const jogos = await requisitar(caminhoAPI);
+            const cards = document.createDocumentFragment();
+            for (const jogo of jogos) {
+                const card = modelo.content.firstElementChild.cloneNode(true);
+                card.dataset.nome = jogo.nome.toLocaleLowerCase("pt-BR");
+                card.querySelector("a").href = "/jogos/" + jogo.id;
+                mostrarJogo(card, jogo, "h3");
+                cards.append(card);
+            }
+            lista.replaceChildren(cards);
+            carregada = true;
+            filtrar();
+            situacao.hidden = true;
+        } catch (erro) {
+            mostrarMensagem(situacao, erro.message, true);
+        }
+    }
+
+    for (const botao of botoes) {
+        botao.addEventListener("click", () => {
+            categoria = botao.value;
+            for (const opcao of botoes) {
+                opcao.setAttribute("aria-pressed", opcao.value === categoria);
+            }
+            filtrar();
+        });
+    }
+    filtroNome.addEventListener("input", filtrar);
+
+    montarFormulario(document.querySelector("#cadastro"), null, async (dados) => {
+        await requisitar(caminhoAPI, "POST", dados);
+        await carregarJogos();
+    });
+    pagina.hidden = false;
+    carregarJogos();
+    window.addEventListener("pageshow", (evento) => {
+        if (evento.persisted) carregarJogos();
+    });
+}
+
+async function abrirDetalhes(identificador) {
+    const situacao = document.querySelector("#situacao-jogo");
+    const conteudo = document.querySelector("#dados-jogo");
+    const caminho = caminhoAPI + "/" + identificador;
+    document.querySelector("#pagina-jogo").hidden = false;
+    situacao.hidden = false;
+    mostrarMensagem(situacao, "Carregando jogo…");
+
+    function mostrarDetalhes(jogo) {
+        document.title = jogo.nome + " | GameLog";
+        mostrarJogo(conteudo.querySelector(".detalhe"), jogo, "h1");
+        conteudo.querySelector(".review").textContent = jogo.review ?? "Nenhuma review registrada.";
+    }
+
+    try {
+        const jogo = await requisitar(caminho);
+        mostrarDetalhes(jogo);
+        montarFormulario(document.querySelector("#edicao"), jogo, async (dados) => {
+            await requisitar(caminho, "PUT", dados);
+            mostrarDetalhes(dados);
+        });
+        conteudo.hidden = false;
+        situacao.hidden = true;
+    } catch (erro) {
+        mostrarMensagem(situacao, erro.message, true);
         return;
     }
-    botao.disabled = true;
-    statusBusca.textContent = "Buscando jogos…";
-    try {
-        const parametros = new URLSearchParams({ title: termo, limit: "10" });
-        const resposta = await fetch("https://www.cheapshark.com/api/1.0/games?" + parametros, {
-            signal: AbortSignal.timeout(8000)
-        });
-        if (resposta.status === 429) {
-            statusBusca.textContent = "Muitas buscas em sequência. Aguarde um pouco e tente novamente.";
-            return;
+
+    const dialogo = document.querySelector("#confirmar-exclusao");
+    const confirmar = document.querySelector("#excluir-jogo");
+    const cancelar = document.querySelector("#cancelar-exclusao");
+    const mensagem = dialogo.querySelector(".mensagem");
+
+    document.querySelector("#abrir-exclusao").addEventListener("click", () => {
+        mostrarMensagem(mensagem, "");
+        dialogo.showModal();
+    });
+    cancelar.addEventListener("click", () => dialogo.close());
+    dialogo.addEventListener("cancel", (evento) => {
+        if (confirmar.disabled) evento.preventDefault();
+    });
+    confirmar.addEventListener("click", async () => {
+        confirmar.disabled = true;
+        cancelar.disabled = true;
+        mostrarMensagem(mensagem, "Excluindo…");
+        try {
+            await requisitar(caminho, "DELETE");
+            window.location.assign("/");
+        } catch (erro) {
+            mostrarMensagem(mensagem, erro.message, true);
+            confirmar.disabled = false;
+            cancelar.disabled = false;
+            confirmar.focus();
         }
-        if (!resposta.ok) throw new Error("Falha na consulta");
-        const jogos = (await resposta.json()).filter(
-            (jogo) => typeof jogo?.external === "string" && jogo.external.trim()
-        );
-        jogos.forEach(mostrarResultado);
-        statusBusca.textContent = jogos.length === 0 ? "Nenhum jogo encontrado." : "";
-    } catch {
-        statusBusca.textContent = "O catálogo está indisponível. Você pode cadastrar o jogo manualmente.";
-    } finally {
-        botao.disabled = false;
-    }
-});
+    });
+}
+
+if (window.location.pathname.startsWith("/jogos/")) {
+    const identificador = window.location.pathname.split("/")[2];
+    abrirDetalhes(identificador);
+} else {
+    abrirBiblioteca();
+}
