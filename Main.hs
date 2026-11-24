@@ -222,20 +222,24 @@ formatoImagem conteudo
     | otherwise = Nothing
 
 enviarCaptura :: Int32 -> MultipartData Mem -> Handler NoContent
-enviarCaptura jogo formularioUpload =
-    case files formularioUpload of
-        [arquivo] | fdInputName arquivo == "imagem" -> do
-            let conteudo = fdPayload arquivo
-            if Arquivo.length conteudo > fromIntegral limiteCaptura
-                then throwError err413 {errBody = "A imagem deve ter ate 5 MB."}
-                else case formatoImagem conteudo of
-                    Nothing -> throwError err400 {errBody = "Envie uma imagem PNG, JPG ou WebP."}
-                    Just (extensao, formato) -> do
-                        resultado <- comBanco (\conexao -> salvarCaptura conexao jogo extensao formato conteudo)
-                        case resultado of
-                            Left erro -> throwError erro
-                            Right () -> voltarJogo jogo
+enviarCaptura jogo formularioUpload = do
+    arquivo <- case files formularioUpload of
+        [unico] | fdInputName unico == "imagem" -> pure unico
         _ -> throwError err400 {errBody = "Selecione uma imagem por envio."}
+
+    let conteudo = fdPayload arquivo
+    if Arquivo.length conteudo > fromIntegral limiteCaptura
+        then throwError err413 {errBody = "A imagem deve ter ate 5 MB."}
+        else pure ()
+
+    (extensao, formato) <- case formatoImagem conteudo of
+        Nothing -> throwError err400 {errBody = "Envie uma imagem PNG, JPG ou WebP."}
+        Just dados -> pure dados
+
+    resultado <- comBanco (\conexao -> salvarCaptura conexao jogo extensao formato conteudo)
+    case resultado of
+        Left erro -> throwError erro
+        Right () -> voltarJogo jogo
 
 salvarCaptura :: Connection -> Int32 -> String -> String -> Arquivo.ByteString -> IO (Either ServerError ())
 salvarCaptura conexao jogo extensao formato conteudo =
@@ -297,23 +301,26 @@ lerCaptura :: Int32 -> Int32 -> Handler (Bytes.ByteString, Bytes.ByteString)
 lerCaptura jogo captura = do
     arquivos <- comBanco (\conexao -> query conexao
         "SELECT caminho FROM screenshots WHERE jogo_id = ? AND id = ?" (jogo, captura))
-    case arquivos of
-        [Only nome] | Just tipo <- tipoImagem nome -> do
-            let caminho = pastaCapturas </> nome
-            existe <- comDisco (doesFileExist caminho)
-            if not existe
-                then throwError err404
-                else do
-                    ehLink <- comDisco (pathIsSymbolicLink caminho)
-                    if ehLink
-                        then throwError err404
-                        else do
-                            conteudo <- comDisco (withBinaryFile caminho ReadMode
-                                (\arquivo -> Bytes.hGet arquivo (limiteCaptura + 1)))
-                            case formatoImagem (Arquivo.fromStrict conteudo) of
-                                Just (extensao, _) | extensao == takeExtension nome && Bytes.length conteudo <= limiteCaptura ->
-                                    pure (tipo, conteudo)
-                                _ -> throwError err404
+    nome <- case arquivos of
+        [Only valor] -> pure valor
+        _ -> throwError err404
+
+    tipo <- case tipoImagem nome of
+        Just valor -> pure valor
+        Nothing -> throwError err404
+
+    let caminho = pastaCapturas </> nome
+    existe <- comDisco (doesFileExist caminho)
+    if not existe then throwError err404 else pure ()
+
+    ehLink <- comDisco (pathIsSymbolicLink caminho)
+    if ehLink then throwError err404 else pure ()
+
+    conteudo <- comDisco (withBinaryFile caminho ReadMode
+        (\arquivo -> Bytes.hGet arquivo (limiteCaptura + 1)))
+    case formatoImagem (Arquivo.fromStrict conteudo) of
+        Just (extensao, _) | extensao == takeExtension nome && Bytes.length conteudo <= limiteCaptura ->
+            pure (tipo, conteudo)
         _ -> throwError err404
 
 verCaptura :: Int32 -> Int32 -> Tagged Handler Wai.Application
